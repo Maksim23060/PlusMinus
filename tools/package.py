@@ -47,7 +47,7 @@ def main() -> int:
                "--distpath", str(DIST), "--workpath", str(ROOT / "build" / "pyinstaller"),
                "--specpath", str(ROOT / "build" / "pyinstaller"),
                "--name", APP, "--windowed", "--onedir" if sys.platform == "darwin" else "--onefile",
-               "--add-binary", f"{runner}{os.pathsep}.", str(IDE / "app.py")]
+               "--add-binary", f"{runner}{os.pathsep}.", str(IDE / "studio_qt.py")]
     subprocess.run(command, cwd=str(ROOT), check=True)
     base_name = f"{APP}-{platform_name}-{machine}"
     if sys.platform == "win32":

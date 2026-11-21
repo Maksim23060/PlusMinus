@@ -1,8 +1,8 @@
-name: Desktop build and portable releases
+name: Desktop Qt builds and portable releases
 
 on:
   push:
-    branches: [master]
+    branches: [master, 'feature/**']
     tags: ['v*']
   pull_request:
   workflow_dispatch:
@@ -27,55 +27,63 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Python with bundled tkinter (Windows and macOS)
+      - name: Setup Python (Windows/macOS)
         if: runner.os != 'Linux'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: System Python, tkinter and Xvfb (Linux)
+      - name: Install Linux build and Qt libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake g++ make python3-tk python3-venv xvfb
+          sudo apt-get install -y cmake g++ make python3-venv xvfb libegl1 libopengl0 libxcb-cursor0
 
-      - name: Build C++ runner and test (Linux)
+      - name: Build C++ runner (Linux)
+        if: runner.os == 'Linux'
+        run: python3 launch.py --no-install --build-only
+
+      - name: Build C++ runner (Windows/macOS)
+        if: runner.os != 'Linux'
+        run: python launch.py --no-install --build-only
+
+      - name: Unit and interpreter tests (Linux)
         if: runner.os == 'Linux'
         run: |
-          python3 launch.py --no-install --build-only
           python3 ide/smoke_test.py
-          python3 -m unittest discover -s tools -p "test_*.py"
-          xvfb-run -a python3 -c 'import tkinter as tk; root=tk.Tk(); root.update(); root.destroy()'
+          python3 -m unittest discover -s tools -p 'test_*.py'
+          python3 -m venv .venv
+          .venv/bin/python -m pip install -r ide/requirements.txt pyinstaller==6.16.0
+          QT_QPA_PLATFORM=offscreen .venv/bin/python ide/studio_qt.py --self-test
+          xvfb-run -a .venv/bin/python -c 'from PySide6.QtWidgets import QApplication; app=QApplication([]); print("Qt OK")'
 
-      - name: Build C++ runner and test (Windows/macOS)
+      - name: Unit and interpreter tests (Windows/macOS)
         if: runner.os != 'Linux'
         run: |
-          python launch.py --no-install --build-only
           python ide/smoke_test.py
           python -m unittest discover -s tools -p "test_*.py"
+          python -m pip install -r ide/requirements.txt pyinstaller==6.16.0
+          python ide/studio_qt.py --self-test
 
-      - name: Build portable application (Linux)
+      - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
-          python3 -m venv .venv
-          .venv/bin/python -m pip install 'pyinstaller==6.16.0'
           .venv/bin/python tools/package.py
+          QT_QPA_PLATFORM=offscreen .venv/bin/python ide/studio_qt.py --self-test
           xvfb-run -a ./dist/PlusMinusStudio --self-test
 
-      - name: Build portable application (Windows/macOS)
+      - name: Package (Windows/macOS)
         if: runner.os != 'Linux'
-        run: |
-          python -m pip install 'pyinstaller==6.16.0'
-          python tools/package.py
+        run: python tools/package.py
 
-      - name: Validate Windows executable
+      - name: Test bundled Windows executable
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $p = Start-Process -FilePath "$PWD\dist\PlusMinusStudio.exe" -ArgumentList '--self-test' -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Bundled self-test failed: $($p.ExitCode)" }
+          if ($p.ExitCode -ne 0) { throw "Bundled self-test failed with $($p.ExitCode)" }
 
-      - name: Validate macOS application
+      - name: Test bundled macOS application
         if: runner.os == 'macOS'
         run: dist/PlusMinusStudio.app/Contents/MacOS/PlusMinusStudio --self-test
 
