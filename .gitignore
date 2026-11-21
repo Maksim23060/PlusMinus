@@ -361,3 +361,9 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Portable desktop output
+/dist/
+/release/
+/build/pyinstaller/
+/*.spec
+/.venv/

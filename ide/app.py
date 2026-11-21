@@ -231,5 +231,21 @@ class Studio:
         if self.busy: self.stop(); self.status.set('Stopping; close again once finished'); return
         if self.confirm(): self.root.destroy()
 
+def bundled_self_test():
+    """Headless check of the bundled runner, used in release CI."""
+    runner = find_runner()
+    if runner is None:
+        return 2
+    for source, expected in (("print(2 + 3 * 4);", "14\n"),
+                             ("x = 10; print(x);", "10\n")):
+        report = execute(runner, source, 'run', 5.0)
+        if not report['ok'] or report['output'].replace('\r\n', '\n') != expected:
+            return 3
+    return 0
+
+
 if __name__=='__main__':
+    import sys
+    if '--self-test' in sys.argv:
+        sys.exit(bundled_self_test())
     root=tk.Tk(); Studio(root); root.mainloop()

@@ -2,7 +2,11 @@
 
 A local, monochrome dark desktop IDE for PlusMinus. The C++ runner uses the repository's existing compiler and VM, isolated in a separate process for each run. No interpreter changes, browser, web server or Python packages are required.
 
-## Build and launch
+## Automatic source launch
+
+From the repository root run `python launch.py` (or `python3 launch.py` on Linux). This installs missing prerequisites with permission, builds the runner and starts the GUI. Standalone release executables require no Python or compiler installation. See root README.
+
+## Manual build and launch
 
 From the repository root, install Python 3 with Tk, CMake and a C++20 compiler. On Fedora:
 

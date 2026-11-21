@@ -1,17 +1,28 @@
 """Subprocess boundary: no interpreter code runs in the GUI process."""
 import json
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 
 def find_runner():
-    base = Path(__file__).resolve().parent
-    for folder in (base / 'build', base / 'build' / 'Release', base / 'build' / 'Debug', base):
-        for name in ('plusminus_runner', 'plusminus_runner.exe'):
-            if (folder / name).is_file():
-                return folder / name
+    """Find the native runner in an editable checkout or frozen bundle."""
+    if getattr(sys, 'frozen', False):
+        roots = (Path(getattr(sys, '_MEIPASS', Path(sys.executable).parent)),
+                 Path(sys.executable).resolve().parent)
+        folders = tuple(folder for root in roots
+                        for folder in (root, root / 'build' / 'Release',
+                                       root / 'build', root / 'build' / 'Debug'))
+    else:
+        root = Path(__file__).resolve().parent
+        folders = (root / 'build' / 'Release', root / 'build', root / 'build' / 'Debug', root)
+    for folder in folders:
+        for name in ('plusminus_runner.exe', 'plusminus_runner'):
+            path = folder / name
+            if path.is_file():
+                return path
     return None
 
 
