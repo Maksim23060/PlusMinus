@@ -1,0 +1,102 @@
+name: Desktop build and portable releases
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            os: windows-2022
+          - platform: linux-x64
+            os: ubuntu-22.04
+          - platform: macos-x64
+            os: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python with bundled tkinter (Windows and macOS)
+        if: runner.os != 'Linux'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: System Python, tkinter and Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ make python3-tk python3-venv xvfb
+
+      - name: Build C++ runner and test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 launch.py --no-install --build-only
+          python3 ide/smoke_test.py
+          python3 -m unittest discover -s tools -p "test_*.py"
+          xvfb-run -a python3 -c 'import tkinter as tk; root=tk.Tk(); root.update(); root.destroy()'
+
+      - name: Build C++ runner and test (Windows/macOS)
+        if: runner.os != 'Linux'
+        run: |
+          python launch.py --no-install --build-only
+          python ide/smoke_test.py
+          python -m unittest discover -s tools -p "test_*.py"
+
+      - name: Build portable application (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install 'pyinstaller==6.16.0'
+          .venv/bin/python tools/package.py
+          xvfb-run -a ./dist/PlusMinusStudio --self-test
+
+      - name: Build portable application (Windows/macOS)
+        if: runner.os != 'Linux'
+        run: |
+          python -m pip install 'pyinstaller==6.16.0'
+          python tools/package.py
+
+      - name: Validate Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "$PWD\dist\PlusMinusStudio.exe" -ArgumentList '--self-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Bundled self-test failed: $($p.ExitCode)" }
+
+      - name: Validate macOS application
+        if: runner.os == 'macOS'
+        run: dist/PlusMinusStudio.app/Contents/MacOS/PlusMinusStudio --self-test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PlusMinusStudio-${{ matrix.platform }}
+          path: release/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: desktop
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true

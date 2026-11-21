@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=PlusMinus Studio
+Comment=Desktop IDE for the PlusMinus C++ interpreter
+Exec=PlusMinusStudio
+Terminal=false
+Categories=Development;IDE;
