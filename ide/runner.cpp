@@ -1,5 +1,6 @@
 #include "Parser.h"
 #include <algorithm>
+#include <chrono>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
@@ -75,14 +76,26 @@ int main(int argc, char** argv) {
     std::string source{std::istreambuf_iterator<char>(std::cin), {}};
     std::string code, output, vars, result, error;
     std::string phase = "compile";
+    using Clock = std::chrono::steady_clock;
+    double compileMs = 0.0, executeMs = 0.0;
+    size_t instructionCount = 0;
     try {
+        auto compilationStart = Clock::now();
         auto program = compileToCommands(source);
+        compileMs = std::chrono::duration<double, std::milli>(Clock::now() - compilationStart).count();
+        instructionCount = program.size();
         code = listing(program);
         if (mode == "run") {
             phase = "runtime";
             VM vm;
+            auto executionStart = Clock::now();
             try { result = number(vm.run(program)); }
-            catch (...) { output = vm.output; throw; }
+            catch (...) {
+                executeMs = std::chrono::duration<double, std::milli>(Clock::now() - executionStart).count();
+                output = vm.output;
+                throw;
+            }
+            executeMs = std::chrono::duration<double, std::milli>(Clock::now() - executionStart).count();
             output = vm.output;
             vars = variables(vm);
         }
@@ -91,6 +104,9 @@ int main(int argc, char** argv) {
     std::cout << "{\"ok\":" << (error.empty() ? "true" : "false")
         << ",\"output\":" << quote(output) << ",\"result\":" << quote(result)
         << ",\"variables\":" << quote(vars) << ",\"bytecode\":" << quote(code)
-        << ",\"error\":" << quote(error) << "}\n";
+        << ",\"error\":" << quote(error)
+        << ",\"metrics\":{\"compile_ms\":" << compileMs
+        << ",\"execute_ms\":" << executeMs
+        << ",\"program_instructions\":" << instructionCount << "}}\n";
     return error.empty() ? 0 : 1;
 }

@@ -2,7 +2,7 @@
 """Build and launch PlusMinus Studio from a source checkout.
 
 Requires Python >= 3.9. Release binaries do not require this launcher or a
-locally installed Python, CMake, compiler, or Tkinter.
+locally installed Python, CMake, compiler, or Qt.
 """
 
 from __future__ import annotations
@@ -98,8 +98,6 @@ def has_tk() -> bool:
 
 def missing_dependencies() -> list[str]:
     missing = []
-    if not has_tk():
-        missing.append("tk")
     if not find_cmake():
         missing.append("cmake")
     if not has_compiler():
@@ -220,6 +218,40 @@ def build_runner(*, install: bool, agree: bool, rebuild: bool) -> Path:
     return result
 
 
+def local_gui_python() -> Path:
+    venv = ROOT / '.venv'
+    return venv / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
+
+
+def gui_python_ready() -> bool:
+    candidate = local_gui_python()
+    if not candidate.exists():
+        candidate = Path(sys.executable)
+    try:
+        result = subprocess.run([str(candidate), '-c', 'import PySide6, psutil'],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=8, check=False)
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def ensure_gui_python(*, install: bool) -> str:
+    candidate = local_gui_python()
+    if gui_python_ready():
+        return str(candidate if candidate.exists() else Path(sys.executable))
+    if not install:
+        raise LaunchError('PySide6/psutil missing. Install ide/requirements.txt, or omit --no-install.')
+    if not candidate.is_file():
+        log('Creating isolated Python environment for PlusMinus Studio...')
+        run([sys.executable, '-m', 'venv', str(ROOT / '.venv')])
+    log('Installing Qt interface and telemetry dependencies (first launch only)...')
+    run([str(candidate), '-m', 'pip', 'install', '-r', str(IDE / 'requirements.txt')])
+    if not gui_python_ready():
+        raise LaunchError('Qt dependencies are unavailable after installation.')
+    return str(candidate)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build and run PlusMinus Studio on Windows, Linux, or macOS.")
     parser.add_argument("--yes", action="store_true", help="Approve system package installation without prompting")
@@ -233,24 +265,20 @@ def main() -> int:
         raise LaunchError("Python 3.9 or newer is required for source launch.")
     if args.check:
         log(f"Operating system: {platform.platform()} ({platform.machine()})")
-        log(f"Python: {sys.version.split()[0]} / tkinter: {'OK' if has_tk() else 'missing'}")
+        log(f"Python: {sys.version.split()[0]} / Qt: {'OK' if gui_python_ready() else 'missing'}")
         log(f"CMake: {find_cmake() or 'missing'} / C++ compiler: {'OK' if has_compiler() else 'missing'}")
         runner = source_runner()
         log(f"C++ runner: {str(runner) if runner else 'missing'}")
-        return 0 if (runner and not needs_build(runner) and has_tk()) or not missing_dependencies() else 1
+        return 0 if not missing_dependencies() and gui_python_ready() else 1
     runner = build_runner(install=not args.no_install, agree=args.yes, rebuild=args.rebuild)
     log(f"Runner ready: {runner}")
     if args.test:
         run([sys.executable, str(IDE / "smoke_test.py")])
     if args.build_only or args.test:
         return 0
-    if not has_tk():
-        if args.no_install:
-            raise LaunchError("The Python interpreter lacks tkinter; cannot launch the GUI.")
-        install_dependencies(["tk"], agree=args.yes)
     if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         raise LaunchError("No graphical session detected (DISPLAY/WAYLAND_DISPLAY is unset).")
-    run([sys.executable, str(IDE / "app.py")])
+    run([ensure_gui_python(install=not args.no_install), str(IDE / "studio_qt.py")])
     return 0
 
 
