@@ -400,13 +400,70 @@ std::string Compiler::parseIdentifier() {
 }
 
 // ============================================================
-//  VM
+//  VM — реальная многопоточность
 // ============================================================
 double VM::run(const std::vector<Command>& program) {
-    std::vector<Value> stack;
     vars.clear();
     output.clear();
-    size_t ip = 0;
+    functions.clear();
+    namedLocks.clear();
+    threads.clear();
+
+    // PRE-SCAN: регистрируем все функции ДО запуска потоков.
+    // Это делает functions read-only во время выполнения -> безопасно без мьютекса.
+    for (size_t i = 0; i < program.size(); ++i) {
+        if (program[i].op == OpCode::FuncDef || program[i].op == OpCode::ProcDef) {
+            FuncInfo fi;
+            fi.params = program[i].params;
+            fi.bodyStart = program[i].target;
+            functions[program[i].name] = fi;
+        }
+    }
+
+    try {
+        // Главный поток: startIp=0, нет кадров, не выходим при Return
+        return executeThread(program, 0, {}, false);
+    }
+    catch (...) {
+        // Прибираем за собой потоки, чтобы не было std::terminate
+        std::vector<std::thread> toJoin;
+        {
+            std::lock_guard<std::mutex> lock(threadsMutex);
+            toJoin = std::move(threads);
+        }
+        for (auto& t : toJoin) if (t.joinable()) t.join();
+        throw;
+    }
+}
+
+void VM::syncAllThreads() {
+    auto self = std::this_thread::get_id();
+    while (true) {
+        std::vector<std::thread> toJoin;
+        {
+            std::lock_guard<std::mutex> lock(threadsMutex);
+            std::vector<std::thread> remaining;
+            for (auto& t : threads) {
+                if (t.get_id() == self) {
+                    remaining.push_back(std::move(t)); // не join сами себя
+                }
+                else {
+                    toJoin.push_back(std::move(t));
+                }
+            }
+            threads = std::move(remaining);
+        }
+        if (toJoin.empty()) break;
+        for (auto& t : toJoin) if (t.joinable()) t.join();
+    }
+}
+
+double VM::executeThread(const std::vector<Command>& program, size_t startIp,
+    std::vector<Frame> initialFrames, bool stopOnEmptyReturn)
+{
+    std::vector<Value> stack;
+    std::vector<Frame> localStack = std::move(initialFrames);
+    size_t ip = startIp;
 
     auto popNum = [&]() {
         if (stack.empty()) throw std::runtime_error("Stack underflow");
@@ -439,6 +496,7 @@ double VM::run(const std::vector<Command>& program) {
                 if (f != it->locals.end()) { stack.push_back(f->second); found = true; break; }
             }
             if (!found) {
+                std::lock_guard<std::mutex> lock(varsMutex);
                 auto it = vars.find(c.name);
                 if (it != vars.end()) stack.push_back(it->second);
                 else stack.push_back(Value(0.0));
@@ -446,14 +504,12 @@ double VM::run(const std::vector<Command>& program) {
             break;
         }
 
-                            // --- ИЗМЕНЕНО: Правильная логика присваивания (Scoping) ---
         case OpCode::Store: {
             if (stack.empty()) throw std::runtime_error("Stack underflow (Store)");
             Value val = stack.back();
             stack.pop_back();
 
             bool found = false;
-            // Ищем переменную в локальных фреймах
             for (auto it = localStack.rbegin(); it != localStack.rend(); ++it) {
                 if (it->locals.count(c.name)) {
                     it->locals[c.name] = val;
@@ -461,20 +517,20 @@ double VM::run(const std::vector<Command>& program) {
                     break;
                 }
             }
-            // Если не нашли в локальных, проверяем глобальные
             if (!found) {
+                std::lock_guard<std::mutex> lock(varsMutex);
                 if (vars.count(c.name)) {
                     vars[c.name] = val;
                 }
+                else if (!localStack.empty()) {
+                    localStack.back().locals[c.name] = val;
+                }
                 else {
-                    // Если переменной нет нигде, создаем ее в текущем контексте
-                    if (!localStack.empty()) localStack.back().locals[c.name] = val;
-                    else vars[c.name] = val;
+                    vars[c.name] = val;
                 }
             }
             break;
         }
-                          // ---------------------------------------------------------
 
         case OpCode::MakeArray: {
             auto arr = std::make_shared<std::vector<double>>(c.argc);
@@ -524,9 +580,7 @@ double VM::run(const std::vector<Command>& program) {
                 std::ostringstream oss;
                 for (size_t i = 0; i < args.size(); ++i) {
                     const Value& arg = args[i];
-                    if (arg.isString()) {
-                        oss << arg.str;
-                    }
+                    if (arg.isString()) oss << arg.str;
                     else if (arg.isArray()) {
                         oss << "[";
                         for (size_t j = 0; j < arg.getArr()->size(); ++j) {
@@ -535,18 +589,15 @@ double VM::run(const std::vector<Command>& program) {
                         }
                         oss << "]";
                     }
-                    else {
-                        oss << arg.getNum();
-                    }
-
-                    // Умный пробел (не добавляем, если строка уже заканчивается на пробел)
+                    else oss << arg.getNum();
                     if (i + 1 < args.size()) {
-                        if (!arg.isString() || arg.str.empty() || arg.str.back() != ' ') {
-                            oss << " ";
-                        }
+                        if (!arg.isString() || arg.str.empty() || arg.str.back() != ' ') oss << " ";
                     }
                 }
-                output += oss.str() + "\n";
+                {
+                    std::lock_guard<std::mutex> lock(outputMutex);
+                    output += oss.str() + "\n";
+                }
                 stack.push_back(Value(0.0));
             }
             else if (c.name == "resize") {
@@ -566,13 +617,11 @@ double VM::run(const std::vector<Command>& program) {
             }
             else if (c.name == "sin") {
                 if (c.argc != 1) throw std::runtime_error("sin expects 1 arg");
-                double val = popNum();
-                stack.push_back(Value(std::sin(val)));
+                stack.push_back(Value(std::sin(popNum())));
             }
             else if (c.name == "cos") {
                 if (c.argc != 1) throw std::runtime_error("cos expects 1 arg");
-                double val = popNum();
-                stack.push_back(Value(std::cos(val)));
+                stack.push_back(Value(std::cos(popNum())));
             }
             else if (c.name == "pow") {
                 if (c.argc != 2) throw std::runtime_error("pow expects 2 args");
@@ -583,8 +632,7 @@ double VM::run(const std::vector<Command>& program) {
             else if (c.name == "fact") {
                 if (c.argc != 1) throw std::runtime_error("fact expects 1 arg");
                 double val = popNum();
-                if (val < 0 || val != std::floor(val))
-                    throw std::runtime_error("Factorial expects non-negative integer");
+                if (val < 0 || val != std::floor(val)) throw std::runtime_error("Factorial expects non-negative integer");
                 double res = 1.0;
                 for (int i = 2; i <= (int)val; ++i) res *= i;
                 stack.push_back(Value(res));
@@ -593,8 +641,7 @@ double VM::run(const std::vector<Command>& program) {
                 if (c.argc != 2) throw std::runtime_error("multifact expects 2 args");
                 double step = popNum();
                 double val = popNum();
-                if (val < 0 || val != std::floor(val) || step < 1)
-                    throw std::runtime_error("Invalid arguments for multifact");
+                if (val < 0 || val != std::floor(val) || step < 1) throw std::runtime_error("Invalid args for multifact");
                 double res = 1.0;
                 for (double i = val; i > 0; i -= step) res *= i;
                 stack.push_back(Value(res));
@@ -605,10 +652,9 @@ double VM::run(const std::vector<Command>& program) {
                 const FuncInfo& fi = functions[c.name];
                 Frame frame;
                 frame.returnIp = ip + 1;
-                for (size_t i = 0; i < fi.params.size(); ++i) {
+                for (size_t i = 0; i < fi.params.size(); ++i)
                     frame.locals[fi.params[i]] = (i < args.size() ? args[i] : Value(0.0));
-                }
-                localStack.push_back(frame);
+                localStack.push_back(std::move(frame));
                 ip = fi.bodyStart;
                 continue;
             }
@@ -620,73 +666,109 @@ double VM::run(const std::vector<Command>& program) {
         }
 
         case OpCode::FuncDef:
-        case OpCode::ProcDef: {
-            FuncInfo fi;
-            fi.params = c.params;
-            fi.bodyStart = c.target;
-            functions[c.name] = fi;
+        case OpCode::ProcDef:
+            // Уже зарегистрировано в pre-scan. Просто пропускаем.
             break;
-        }
+
         case OpCode::Return: {
             Value ret = stack.empty() ? Value(0.0) : stack.back();
             if (!stack.empty()) stack.pop_back();
-            if (localStack.empty()) { ip = program.size(); continue; }
-            ip = localStack.back().returnIp;
+
+            if (localStack.empty()) {
+                if (stopOnEmptyReturn) return ret.getNum();
+                ip = program.size();
+                continue;
+            }
+
+            size_t returnIp = localStack.back().returnIp;
             localStack.pop_back();
 
-            // --- ИЗМЕНЕНО: Не оставляем мусор на стеке, если возвращаемся в Sync ---
-            if (ip < program.size() && program[ip].op != OpCode::Sync) {
-                stack.push_back(ret);
+            if (localStack.empty() && stopOnEmptyReturn) {
+                return ret.getNum();
             }
+
+            ip = returnIp;
+            stack.push_back(ret);
             continue;
         }
+
         case OpCode::GoCall: {
             std::vector<Value> args(c.argc);
             for (int i = c.argc - 1; i >= 0; --i) {
                 if (stack.empty()) throw std::runtime_error("Stack underflow in go");
                 args[i] = stack.back(); stack.pop_back();
             }
-            goTasks.push_back({ c.name, args });
-            break;
-        }
-        case OpCode::Sync: {
-            if (!goTasks.empty()) {
-                GoTask task = goTasks.front();
-                goTasks.erase(goTasks.begin());
-                auto it = functions.find(task.name);
-                if (it != functions.end()) {
-                    const FuncInfo& fi = it->second;
-                    Frame frame;
-                    frame.returnIp = ip;
-                    for (size_t i = 0; i < fi.params.size(); ++i)
-                        frame.locals[fi.params[i]] = (i < task.args.size() ? task.args[i] : Value(0.0));
-                    localStack.push_back(frame);
-                    ip = fi.bodyStart;
-                    continue;
-                }
+            auto it = functions.find(c.name);
+            if (it == functions.end()) {
+                for (auto& a : args) (void)a;
+                break;
             }
+            const FuncInfo& fi = it->second;
+            Frame frame;
+            frame.returnIp = program.size(); // фиктивный: не используется в потоке
+            for (size_t i = 0; i < fi.params.size(); ++i)
+                frame.locals[fi.params[i]] = (i < args.size() ? args[i] : Value(0.0));
+
+            std::vector<Frame> initialStack;
+            initialStack.push_back(std::move(frame));
+            size_t startBody = fi.bodyStart;
+
+            // Реальный поток!
+            std::lock_guard<std::mutex> lock(threadsMutex);
+            threads.emplace_back(
+                [this, prog = &program, startBody, initialStack = std::move(initialStack)]() mutable {
+                    try {
+                        this->executeThread(*prog, startBody, std::move(initialStack), true);
+                    }
+                    catch (const std::exception& e) {
+                        std::lock_guard<std::mutex> lk(this->outputMutex);
+                        this->output += std::string("[thread error] ") + e.what() + "\n";
+                    }
+                });
             break;
         }
+
+        case OpCode::Sync:
+            syncAllThreads();
+            break;
+
         case OpCode::Lock: {
-            if (!namedLocks[c.name]) namedLocks[c.name] = std::make_unique<std::mutex>();
-            namedLocks[c.name]->lock();
+            std::mutex* m = nullptr;
+            {
+                std::lock_guard<std::mutex> guard(locksMutex);
+                if (!namedLocks[c.name]) namedLocks[c.name] = std::make_unique<std::mutex>();
+                m = namedLocks[c.name].get();
+            }
+            m->lock();
             break;
         }
         case OpCode::Unlock: {
-            if (namedLocks[c.name]) namedLocks[c.name]->unlock();
+            std::mutex* m = nullptr;
+            {
+                std::lock_guard<std::mutex> guard(locksMutex);
+                auto it = namedLocks.find(c.name);
+                if (it == namedLocks.end()) break;
+                m = it->second.get();
+            }
+            m->unlock();
             break;
         }
 
         case OpCode::Jmp: ip = (size_t)c.target; continue;
         case OpCode::Jz:  if (popNum() == 0.0) { ip = (size_t)c.target; continue; } break;
         case OpCode::Pop: if (!stack.empty()) stack.pop_back(); break;
-        case OpCode::Halt: ip = program.size(); continue;
+        case OpCode::Halt:
+            syncAllThreads(); // ждём все потоки перед выходом
+            ip = program.size();
+            continue;
         }
         ++ip;
     }
     return stack.empty() ? 0.0 : stack.back().getNum();
 }
 
+// Остальные глобальные функции (isExpression, compileToCommands, evaluate,
+// runAndGetVars, getArrayVar, getOutput) — без изменений.
 // ============================================================
 //  ГЛОБАЛЬНЫЕ ФУНКЦИИ
 // ============================================================

@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 enum class OpCode {
     PushConst, PushVar, Store,
@@ -98,17 +99,23 @@ public:
         std::unordered_map<std::string, Value> locals;
         size_t returnIp;
     };
-    struct GoTask {
-        std::string name;
-        std::vector<Value> args;
-    };
 
     std::unordered_map<std::string, FuncInfo> functions;
-    std::vector<Frame> localStack;
-    std::vector<GoTask> goTasks;
+    std::vector<std::thread> threads;
     std::unordered_map<std::string, std::unique_ptr<std::mutex>> namedLocks;
 
+    // Мьютексы для защиты общего состояния
+    std::mutex varsMutex;    // защищает vars
+    std::mutex outputMutex;  // защищает output
+    std::mutex threadsMutex; // защищает threads
+    std::mutex locksMutex;   // защищает namedLocks map
+
     double run(const std::vector<Command>& program);
+
+private:
+    double executeThread(const std::vector<Command>& program, size_t startIp,
+        std::vector<Frame> initialFrames, bool stopOnEmptyReturn);
+    void syncAllThreads();
 };
 
 bool isExpression(const std::string& input);

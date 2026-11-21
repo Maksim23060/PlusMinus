@@ -1,5 +1,7 @@
 ﻿#include "CppUnitTest.h"
 #include "Parser.h"
+#include <chrono>
+#include <cmath>
 
 using namespace Microsoft::VisualStudio::CppUnitTestFramework;
 
@@ -1700,12 +1702,25 @@ namespace ParserTests
 
             std::string out = getOutput(prog);
 
-            // Так как sync обрабатывает очередь FIFO:
-            // 1. Выполняется "before sync"
-            // 2. sync берет outer(), печатает start, кладет inner() в конец очереди, печатает end.
-            // 3. sync берет inner(), печатает inner.
-            // 4. sync завершается, печатается "after sync"
-            Assert::AreEqual(std::string("before sync\nouter start\nouter end\ninner\nafter sync\n"), out);
+            // Порядок между "outer start/end" и "inner" теперь недетерминирован,
+            // так как они бегут параллельно на разных ядрах.
+            // Проверяем только то, что точно гарантировано.
+            Assert::IsTrue(out.find("before sync") != std::string::npos);
+            Assert::IsTrue(out.find("after sync") != std::string::npos);
+            Assert::IsTrue(out.find("outer start") != std::string::npos);
+            Assert::IsTrue(out.find("outer end") != std::string::npos);
+            Assert::IsTrue(out.find("inner") != std::string::npos);
+
+            // before всегда до after
+            Assert::IsTrue(out.find("before sync") < out.find("after sync"));
+            // outer start всегда до outer end (в одном потоке)
+            Assert::IsTrue(out.find("outer start") < out.find("outer end"));
+            // before всегда до outer start (поток стартует после print)
+            Assert::IsTrue(out.find("before sync") < out.find("outer start"));
+            // after всегда после всего
+            Assert::IsTrue(out.find("after sync") > out.find("outer start"));
+            Assert::IsTrue(out.find("after sync") > out.find("outer end"));
+            Assert::IsTrue(out.find("after sync") > out.find("inner"));
         }
 
         // 4. Несколько sync подряд очищают очередь по частям
@@ -1746,6 +1761,45 @@ namespace ParserTests
             auto v = runAndGetVars(prog);
             // 3 воркера по 10 инкрементов = 30
             Assert::AreEqual(30.0, (double)v["res"]);
+        }
+    };
+    // ============================================================
+//  СРАВНЕНИЕ ВРЕМЕНИ ВЫПОЛНЕНИЯ (Sync vs Async)
+// ============================================================
+    TEST_CLASS(AsyncPerformance)
+    {
+    public:
+        TEST_METHOD(CompareSyncVsAsyncTime)
+        {
+            // Тяжёлая функция: ~100k итераций
+            std::string heavyFunc =
+                "proc heavy() {\n"
+                "  i = 0; sum = 0;\n"
+                "  while (i < 50000) { sum = sum + i; i = i + 1; }\n"
+                "}\n";
+
+            // Синхронно
+            auto startSync = std::chrono::high_resolution_clock::now();
+            evaluate(heavyFunc + "heavy(); heavy();");
+            auto endSync = std::chrono::high_resolution_clock::now();
+            auto timeSync = std::chrono::duration_cast<std::chrono::milliseconds>(endSync - startSync).count();
+
+            // Асинхронно (реальные потоки)
+            auto startAsync = std::chrono::high_resolution_clock::now();
+            evaluate(heavyFunc + "go heavy(); go heavy(); sync;");
+            auto endAsync = std::chrono::high_resolution_clock::now();
+            auto timeAsync = std::chrono::duration_cast<std::chrono::milliseconds>(endAsync - startAsync).count();
+
+            // Логируем в Test Output
+            std::string msg = "\n--- Performance ---\n";
+            msg += "Sync:  " + std::to_string(timeSync) + " ms\n";
+            msg += "Async: " + std::to_string(timeAsync) + " ms\n";
+            msg += "Speedup: " + std::to_string((double)timeSync / std::max(1.0, (double)timeAsync)) + "x\n";
+            Logger::WriteMessage(msg.c_str());
+
+            // На многоядерном ПК async должен быть быстрее (или хотя бы не сильно медленнее).
+            // На одноядерном/CI - возможно равенство.
+            Assert::IsTrue(timeSync > 0 && timeAsync > 0, L"Both timings should be positive");
         }
     };
 }
