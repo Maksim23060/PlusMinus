@@ -83,3 +83,26 @@ Programs run in a separate process with a configurable timeout, **not** in an OS
 security sandbox. Do not execute untrusted PlusMinus source without additional OS
 isolation. Startup tests run only a small, trusted built-in suite; arbitrary imported
 user programs are not executed automatically. The GUI uses no cloud service.
+
+
+## Language Internals — edit the C++ language inside Studio
+
+Hold **Ctrl** and click a PlusMinus keyword or built-in function in the code
+editor (for example `if`, `while`, `go`, `print`, `pow`, or `len`).
+The separate **Language Internals** window opens the real implementation in
+`Parser.cpp` and lets you switch between compiler and runtime
+sections. It also provides the core types/opcodes from `Parser.h`
+and the JSON runner adapter in `ide/runner.cpp`.
+
+You can edit the actual C++ implementation and press **Ctrl+S**. Studio saves
+a backup under `.plusminus-backups/`, writes the C++ source
+atomically, and by default rebuilds the runner in the background. If compilation
+succeeds, the built-in tests run again automatically. If compilation fails,
+Studio blocks using the obsolete VM until a successful rebuild. Turn off
+automatic rebuilding in Language Internals to build manually.
+
+Open the symbol browser with **Ctrl+Shift+I** or the **Language C++**
+toolbar button. Native source editing needs the checked-out project sources,
+CMake, and a C++20 compiler; standalone prebuilt binaries cannot edit the
+embedded interpreter. The editor does not hot-patch a running VM: changes
+take effect after saving and successfully rebuilding.

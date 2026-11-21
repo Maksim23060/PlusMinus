@@ -55,6 +55,7 @@ jobs:
           python3 -m venv .venv
           .venv/bin/python -m pip install -r ide/requirements.txt pyinstaller==6.16.0
           QT_QPA_PLATFORM=offscreen .venv/bin/python ide/studio_qt.py --self-test
+          .venv/bin/python tools/smoke_qt.py
           xvfb-run -a .venv/bin/python -c 'from PySide6.QtWidgets import QApplication; app=QApplication([]); print("Qt OK")'
 
       - name: Unit and interpreter tests (Windows/macOS)
@@ -64,6 +65,7 @@ jobs:
           python -m unittest discover -s tools -p "test_*.py"
           python -m pip install -r ide/requirements.txt pyinstaller==6.16.0
           python ide/studio_qt.py --self-test
+          python tools/smoke_qt.py
 
       - name: Package (Linux)
         if: runner.os == 'Linux'

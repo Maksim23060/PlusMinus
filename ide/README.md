@@ -17,3 +17,12 @@ The 5 canonical regression checks are in `ide/smoke_test.py`, and the new GUI
 has its own built-in startup suite. Automated non-GUI tests are under `tools/`.
 
 For standalone bundling, use `python tools/package.py` after installing PyInstaller.
+
+
+### Native language source editing
+
+Hold Ctrl and click a keyword or built-in name in the editor to open the
+editable source and description in Language Internals. Use Ctrl+Shift+I
+to browse all keywords, Parser.h, and the runner adapter. Save with Ctrl+S;
+a successful background C++ rebuild triggers the built-in regression suite.
+Source editing is disabled in packaged binaries without C++ source files.
