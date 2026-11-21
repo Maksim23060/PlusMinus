@@ -10,6 +10,7 @@ import csv
 import json
 import os
 import re
+import subprocess
 import statistics
 import sys
 import threading
@@ -29,6 +30,8 @@ from PySide6.QtWidgets import (
 from analytics import (BUILTIN_TESTS, HistoryStore, analyze_bytecode, analyze_source,
                        judge_test, summarize_benchmark)
 from engine import execute, find_runner
+from internals import keyword_at, editable_checkout
+from language_window import LanguageSourceWindow
 
 try:
     import psutil
@@ -214,13 +217,36 @@ class LineNumberArea(QWidget):
 
 
 class CodeEditor(QPlainTextEdit):
-    """Code-focused editor with synchronized, dynamically sized line numbers."""
+    """Source editor with Ctrl+click into the actual C++ interpreter code."""
+    definitionRequested = Signal(str)
     def __init__(self):
         super().__init__()
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self.setToolTip('Ctrl + click a language keyword to edit the C++ implementation')
         self.gutter = LineNumberArea(self)
         self.blockCountChanged.connect(self.update_gutter_width)
         self.updateRequest.connect(self.update_gutter)
         self.update_gutter_width(0)
+
+    def mousePressEvent(self, event):
+        if (event.button() == Qt.MouseButton.LeftButton and
+                event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            cursor = self.cursorForPosition(event.position().toPoint())
+            keyword = keyword_at(self.toPlainText(), cursor.position())
+            if keyword:
+                self.definitionRequested.emit(keyword)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        cursor = self.cursorForPosition(event.position().toPoint())
+        active = (QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier and
+                  keyword_at(self.toPlainText(), cursor.position()))
+        self.viewport().setCursor(Qt.CursorShape.PointingHandCursor if active
+                                  else Qt.CursorShape.IBeamCursor)
+        super().mouseMoveEvent(event)
 
     def gutter_width(self):
         digits = len(str(max(1,self.blockCount())))
@@ -303,6 +329,8 @@ class Studio(QMainWindow):
         self.settings = QSettings('PlusMinus', 'Studio2')
         self.history = HistoryStore()
         self.runner = find_runner()
+        self.language_window = None
+        self.native_building = False
         self.file = None
         self.saved = EXAMPLE
         self.last_report = None
@@ -376,6 +404,7 @@ class Studio(QMainWindow):
         toolbar_layout.addWidget(button('Run  F5', lambda: self.launch('run'), primary=True))
         toolbar_layout.addWidget(button('Profile  F6', lambda: self.launch('run', profile=True)))
         toolbar_layout.addWidget(button('Run tests', self.start_tests))
+        toolbar_layout.addWidget(button('Language C++', self.open_language_internals))
         toolbar_layout.addWidget(button('Stop', self.stop))
         right_layout.addWidget(toolbar)
         self.stack = QStackedWidget()
@@ -390,7 +419,8 @@ class Studio(QMainWindow):
         for shortcut, action in [('F5', lambda: self.launch('run')),
                                  ('F6', lambda: self.launch('run', profile=True)),
                                  ('Ctrl+S', self.save_file), ('Ctrl+O', self.open_file),
-                                 ('Ctrl+N', self.new_file)]:
+                                 ('Ctrl+N', self.new_file),
+                                 ('Ctrl+Shift+I', self.open_language_internals)]:
             a = QAction(self)
             a.setShortcut(shortcut)
             a.triggered.connect(action)
@@ -442,6 +472,7 @@ class Studio(QMainWindow):
         toolbar.addWidget(button('New', self.new_file))
         toolbar.addWidget(button('Compile', lambda: self.launch('compile')))
         toolbar.addWidget(button('Run', lambda: self.launch('run'), primary=True))
+        toolbar.addWidget(button('Language Internals  Ctrl+click', self.open_language_internals))
         layout.addLayout(toolbar)
         split = QSplitter(Qt.Orientation.Horizontal)
         edit = QWidget()
@@ -455,6 +486,7 @@ class Studio(QMainWindow):
         self.editor.setFont(font)
         self.highlight = Syntax(self.editor.document())
         self.editor.cursorPositionChanged.connect(self.update_cursor)
+        self.editor.definitionRequested.connect(self.open_language_internals)
         edit_layout.addWidget(self.editor)
         self.cursor_label = label('Line 1  ·  Column 1',style='muted')
         edit_layout.addWidget(self.cursor_label)
@@ -610,6 +642,75 @@ class Studio(QMainWindow):
     def error(self, message):
         self.statusBar().showMessage(message, 13000)
         self.dashboard_notes.setText(message)
+
+    def open_language_internals(self, keyword=None):
+        if not editable_checkout(ROOT) or getattr(sys, 'frozen', False):
+            QMessageBox.information(self, 'Language source unavailable',
+                'Editing the native interpreter requires a full PlusMinus source checkout. '
+                'Clone the repository and run Start-PlusMinus. Prebuilt applications '
+                'do not include editable C++ sources and a development toolchain.')
+            return
+        if isinstance(keyword, bool) or not isinstance(keyword, str):
+            keyword = 'if'
+        if self.language_window is None:
+            self.language_window = LanguageSourceWindow(ROOT, self)
+            self.language_window.sourceSaved.connect(self.language_source_saved)
+            self.language_window.rebuildRequested.connect(self.rebuild_language)
+        self.language_window.select_symbol(keyword)
+        self.language_window.show()
+        self.language_window.raise_()
+        self.language_window.activateWindow()
+
+    def language_source_saved(self, path):
+        # Do not accidentally execute a stale VM after modifying its C++ code.
+        self.runner = None
+        self.engine_status.setText('● Native source changed / rebuild required')
+        self.statusBar().showMessage(f'Interpreter source saved: {path}', 9000)
+        if self.language_window and self.language_window.auto_build.isChecked():
+            self.rebuild_language()
+
+    def rebuild_language(self):
+        if getattr(sys, 'frozen', False) or not editable_checkout(ROOT):
+            self.error('Rebuilding requires source files, CMake and a C++20 compiler.')
+            return
+        if self.native_building:
+            self.error('The C++ runner is already rebuilding.')
+            return
+        if any(job.isRunning() for job in self.jobs):
+            self.error('Wait for running tests/programs to finish, then click Rebuild & test.')
+            return
+        self.native_building = True
+        self.runner = None
+        self.engine_status.setText('● Rebuilding C++ interpreter...')
+        def work():
+            try:
+                process = subprocess.run(
+                    [sys.executable, str(ROOT/'launch.py'), '--no-install', '--build-only'],
+                    cwd=str(ROOT), capture_output=True, text=True,
+                    timeout=240, check=False)
+                return process.returncode == 0, (process.stdout+'\n'+process.stderr)[-16000:]
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return False, str(exc)
+        self.spawn(work, self.language_rebuilt, 'C++ rebuild')
+
+    def language_rebuilt(self, result):
+        self.native_building = False
+        ok, build_log = result
+        if not ok:
+            self.runner = None
+            self.engine_status.setText('● C++ rebuild failed')
+            self.error('Native rebuild failed; inspect the compiler output.')
+            QMessageBox.warning(self, 'C++ compilation failed',
+                'Edited interpreter code did not compile. The old VM will not run.\n\n'+
+                build_log[-8500:])
+            return
+        self.runner = find_runner()
+        if self.runner is None:
+            self.error('C++ build reported success but did not produce a runner.')
+            return
+        self.engine_status.setText('● Runtime rebuilt')
+        self.statusBar().showMessage('C++ interpreter rebuilt. Rerunning built-in tests.',10000)
+        self.start_tests(startup=True)
 
     def update_cursor(self):
         cursor = self.editor.textCursor()
@@ -1020,6 +1121,9 @@ class Studio(QMainWindow):
             self.error(f'Export failed: {exc}')
 
     def closeEvent(self, event):
+        if self.language_window and not self.language_window.confirm_leave():
+            event.ignore()
+            return
         if not self.maybe_save():
             event.ignore()
             return
