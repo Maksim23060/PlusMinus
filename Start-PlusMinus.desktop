@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PlusMinus Studio (source)
+Comment=Build and start the PlusMinus desktop IDE
+Exec=sh -c "exec sh \"$(dirname \"$0\")/Start-PlusMinus.sh\"" %k
+Terminal=true
+Icon=applications-development
+Categories=Development;IDE;

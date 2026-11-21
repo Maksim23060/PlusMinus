@@ -1,7 +1,9 @@
 [Desktop Entry]
+Version=1.0
 Type=Application
 Name=PlusMinus Studio
 Comment=Desktop IDE for the PlusMinus C++ interpreter
-Exec=PlusMinusStudio
+Exec=sh -c "exec \"$(dirname \"$0\")/PlusMinusStudio\"" %k
 Terminal=false
+Icon=applications-development
 Categories=Development;IDE;
