@@ -1,0 +1,96 @@
+#include "Parser.h"
+#include <algorithm>
+#include <iomanip>
+#include <iostream>
+#include <iterator>
+#include <limits>
+#include <sstream>
+#include <string>
+
+// JSON strings keep source output, diagnostics and inspection data separate.
+static std::string quote(const std::string& s) {
+    std::ostringstream out; out << '"';
+    for (unsigned char ch : s) {
+        switch (ch) {
+            case '"': out << "\\\""; break;
+            case '\\': out << "\\\\"; break;
+            case '\n': out << "\\n"; break;
+            case '\r': out << "\\r"; break;
+            case '\t': out << "\\t"; break;
+            default: if (ch < 32) out << "\\u00" << std::hex << std::setw(2) << std::setfill('0') << int(ch) << std::dec; else out << ch;
+        }
+    }
+    out << '"'; return out.str();
+}
+static std::string number(double x) {
+    std::ostringstream s; s << std::setprecision(std::numeric_limits<double>::max_digits10) << x; return s.str();
+}
+static const char* opcode(OpCode op) {
+    switch (op) {
+#define OP(x) case OpCode::x: return #x;
+        OP(PushConst) OP(PushVar) OP(Store) OP(MakeArray) OP(MakeArraySized)
+        OP(LoadIndex) OP(StoreIndex) OP(Add) OP(Sub) OP(Mul) OP(Div) OP(Mod) OP(Pow)
+        OP(Less) OP(Greater) OP(And) OP(Call) OP(FuncDef) OP(ProcDef) OP(Return)
+        OP(GoCall) OP(Sync) OP(Lock) OP(Unlock) OP(Jmp) OP(Jz) OP(Pop) OP(Halt)
+#undef OP
+    }
+    return "Unknown";
+}
+static std::string listing(const std::vector<Command>& program) {
+    std::ostringstream s;
+    for (size_t i=0; i<program.size(); ++i) {
+        const auto& c = program[i];
+        s << std::setw(4) << i << "  " << opcode(c.op);
+        if (!c.name.empty()) s << "  " << c.name;
+        if (c.op == OpCode::PushConst) s << "  " << (c.isStr ? quote(c.str) : number(c.num));
+        if (c.op == OpCode::Call || c.op == OpCode::GoCall || c.op == OpCode::MakeArray) s << "  argc=" << c.argc;
+        if (c.target >= 0) s << "  -> " << c.target;
+        for (const auto& p : c.params) s << "  " << p;
+        s << '\n';
+    }
+    return s.str();
+}
+static std::string variables(const VM& vm) {
+    std::vector<std::string> names;
+    for (const auto& entry: vm.vars) names.push_back(entry.first);
+    std::sort(names.begin(), names.end());
+    std::ostringstream s;
+    for (const auto& name: names) {
+        const auto& v = vm.vars.at(name);
+        s << name << " = ";
+        if (v.isArray()) {
+            s << '['; const auto& a = *v.getArr();
+            for(size_t i=0; i<std::min<size_t>(a.size(), 200); ++i) { if(i) s << ", "; s << number(a[i]); }
+            if(a.size()>200) s << ", ... (" << a.size() << " entries)";
+            s << ']';
+        } else if (v.isString()) s << quote(v.str);
+        else s << number(v.getNum());
+        s << '\n';
+    }
+    return s.str();
+}
+int main(int argc, char** argv) {
+    const std::string mode = argc == 2 ? argv[1] : "run";
+    if (mode != "run" && mode != "compile") { std::cerr << "Usage: plusminus_runner [run|compile]\n"; return 2; }
+    std::string source{std::istreambuf_iterator<char>(std::cin), {}};
+    std::string code, output, vars, result, error;
+    std::string phase = "compile";
+    try {
+        auto program = compileToCommands(source);
+        code = listing(program);
+        if (mode == "run") {
+            phase = "runtime";
+            VM vm;
+            try { result = number(vm.run(program)); }
+            catch (...) { output = vm.output; throw; }
+            output = vm.output;
+            vars = variables(vm);
+        }
+    } catch (const std::exception& e) { error = phase + ": " + e.what(); }
+      catch (...) { error = phase + ": unknown failure"; }
+    std::cout << "{\"ok\":" << (error.empty() ? "true" : "false")
+        << ",\"output\":" << quote(output) << ",\"result\":" << quote(result)
+        << ",\"variables\":" << quote(vars) << ",\"bytecode\":" << quote(code)
+        << ",\"error\":" << quote(error) << "}\n";
+    return error.empty() ? 0 : 1;
+}
