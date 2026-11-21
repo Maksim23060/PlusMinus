@@ -1,60 +1,108 @@
-# PlusMinus Studio
+# PlusMinus Studio 2.0
 
-PlusMinus is a C++20 interpreter with a local dark Tkinter desktop IDE.
+**A native desktop analytics IDE for the PlusMinus C++20 interpreter.**
 
-## Double-click startup
+PlusMinus Studio has a Qt/PySide6 dark GUI, a code editor, live resource monitoring,
+startup regression tests, benchmark lab, bytecode analysis, a persistent run history,
+and portable binary packaging for Windows, Linux and macOS.
 
-For a **source checkout**, use the launcher in the repository root:
+## Start with a double-click
 
-- **Windows:** double-click `Start-PlusMinus.cmd`.
-- **Linux (desktop environment):** double-click `Start-PlusMinus.desktop`; some file managers require a one-time **Allow Launching / Mark as Trusted** action. Alternatively, run `sh Start-PlusMinus.sh`.
-- **macOS:** double-click `Start-PlusMinus.command` in Finder. macOS may require confirming an unsigned script.
+Download the repository or clone it, then launch from its top-level folder:
 
-These launchers delegate to `launch.py` in the same directory, so you can start them from a folder whose name contains spaces. They compile the C++ runner on first use and launch the IDE; subsequent launches reuse the build. **Starting from source requires an existing Python 3.9+ installation**. The launcher asks before installing missing system tools where supported, and the first launch may take some time.
+| Operating system | Double-click | Source prerequisites |
+|---|---|---|
+| Windows | `Start-PlusMinus.cmd` | Python 3.9+ (with venv/pip), CMake, Visual Studio C++ tools |
+| Linux | `Start-PlusMinus.desktop` | Python 3.9+, CMake, C++20 compiler |
+| macOS | `Start-PlusMinus.command` | Python 3.9+, CMake, Apple Command Line Tools |
 
-For **true no-dependency double-click startup**, use the prebuilt application from GitHub Releases: `PlusMinusStudio.exe` (Windows), `PlusMinusStudio` or the accompanying `.desktop` file (Linux), and `PlusMinusStudio.app` (macOS). Linux desktops may still require the file to be marked executable/trusted.
+The source launcher **automatically builds the C++ VM and creates a local `.venv`**,
+then installs the free Python GUI dependencies from `ide/requirements.txt`.
+For native build prerequisites, it asks before installing system packages where supported.
+Linux file managers may require **Allow Launching / Mark as Trusted** once. On macOS,
+unsigned command files may need a permission adjustment.
 
-## Install-free desktop releases
+For **installation-free startup**, download a platform-native binary from the
+[GitHub Releases](https://github.com/Maksim23060/PlusMinus/releases) page *once a
+successful tagged build has been published*:
 
-Get the archive for your platform from [GitHub Releases](https://github.com/Maksim23060/PlusMinus/releases) after a version tag is published:
+- Windows: extract and double-click `PlusMinusStudio.exe`.
+- Linux: extract and run `PlusMinusStudio/PlusMinusStudio` or the accompanying `.desktop` shortcut.
+- macOS Intel: extract and open `PlusMinusStudio.app`.
 
-- **Windows x86-64:** extract `PlusMinusStudio-windows-x86_64.zip` and run `PlusMinusStudio.exe`.
-- **Linux x86-64:** extract `PlusMinusStudio-linux-x86_64.tar.gz` and run `PlusMinusStudio/PlusMinusStudio` on a compatible glibc-based desktop Linux distribution.
-- **macOS Intel:** extract `PlusMinusStudio-macos-x86_64.zip` and open `PlusMinusStudio.app`. These unsigned apps may require an exception in macOS Privacy & Security.
+The executable bundles Python, Qt, psutil and the C++ runner. macOS unsigned binaries
+may require approval in Privacy & Security. Linux bundles depend on a compatible glibc.
 
-Standalone releases contain the Python runtime, Tkinter and C++ runner. No compiler, CMake or separately installed Python is required. Extract the archive before running. A single executable cannot work across all operating systems and architectures: ARM64, musl Linux and older glibc distributions are not tested.
+## Features
 
-## Launch from source
+| Area | Features |
+|---|---|
+| Overview | Test health, execution and memory cards, performance history |
+| Code Editor | Syntax highlighting, line numbers, open/save, code insights, compiler output, bytecode, variables |
+| Test Center | Automatic startup suite, separate process per test, expected vs actual, import/export user tests |
+| Profiler | Real wall/CPU time, sampled RSS and thread counts, C++ VM phase timing, compiled opcode frequencies |
+| Resources | Live GUI CPU/RSS graph and per-program memory trend |
+| Benchmarks | Repeated runs, warmup, mean, median, P95, standard deviation, graphical comparisons |
+| History | SQLite records (in `~/.plusminus/studio.db`), CSV and JSON export |
 
-Python **3.9+** must already be available.
+**Measurement honesty:** Source complexity is a lexical *estimate*, not a full AST or
+control-flow proof. Compiled opcode counts are *static* counts, not execution frequency.
+CPU and memory are sampled; very short processes may escape reliable sampling, and
+sampled peak RSS is not an absolute guaranteed maximum. VM internal timings are only
+present after rebuilding the C++ runner with the metric protocol.
 
-```sh
-python launch.py
+## Command-line operations
+
+```bash
+python launch.py                  # compile VM if needed, install GUI deps locally, start GUI
+python launch.py --check          # inspect environment; never install
+python launch.py --no-install     # fail without adding missing dependencies
+python launch.py --build-only     # compile the C++ runner
+python launch.py --test           # legacy C++ smoke tests
+python launch.py --rebuild        # force native rebuild
 ```
 
-Use `python3 launch.py` on Linux where necessary. The launcher checks Tkinter, CMake and a C++20 compiler, asks before installing missing system packages when supported (apt, dnf, pacman, zypper and winget), builds the native runner and launches the GUI. Internet access and elevated permissions may be needed for system package installation. Apple Command Line Tools are required for source builds on macOS.
+## Development and release packaging
 
-```sh
-python launch.py --check         # only report prerequisites
-python launch.py --no-install    # do not install system packages
-python launch.py --yes           # consent to installing missing packages
-python launch.py --build-only    # compile without launching GUI
-python launch.py --test          # run C++ runner smoke tests
-python launch.py --rebuild       # force a clean build
+```bash
+python launch.py --build-only
+python -m venv .venv
+# Activate .venv or call .venv/Scripts/python.exe on Windows:
+.venv/bin/python -m pip install -r ide/requirements.txt pyinstaller==6.16.0
+.venv/bin/python -m unittest discover -s tools -p 'test_*.py'
+.venv/bin/python tools/package.py
 ```
 
-The runner is reused without rebuilding when its sources have not changed.
+GitHub Actions builds portable bundles per operating system, verifies the runner and
+runs headless smoke tests. These are separate native artifacts, not a single binary
+usable across operating systems.
 
-## Development and releases
+## Security and scope
 
-```sh
-python launch.py --no-install --build-only
-python ide/smoke_test.py
-python -m unittest discover -s tools -p "test_*.py"
-python -m pip install pyinstaller==6.16.0
-python tools/package.py
-```
+Programs run in a separate process with a configurable timeout, **not** in an OS
+security sandbox. Do not execute untrusted PlusMinus source without additional OS
+isolation. Startup tests run only a small, trusted built-in suite; arbitrary imported
+user programs are not executed automatically. The GUI uses no cloud service.
 
-`tools/package.py` writes an archive to `release/`; bundles support `--self-test` to verify the embedded runner. GitHub Actions builds and tests Windows, Linux and Intel macOS on PRs, and publishes binaries for version tags (for example `v1.0.0`).
 
-See [ide/README.md](ide/README.md) for interface features. Running source programs in a separate process is **not** a security sandbox; do not run untrusted programs.
+## Language Internals — edit the C++ language inside Studio
+
+Hold **Ctrl** and click a PlusMinus keyword or built-in function in the code
+editor (for example `if`, `while`, `go`, `print`, `pow`, or `len`).
+The separate **Language Internals** window opens the real implementation in
+`Parser.cpp` and lets you switch between compiler and runtime
+sections. It also provides the core types/opcodes from `Parser.h`
+and the JSON runner adapter in `ide/runner.cpp`.
+
+You can edit the actual C++ implementation and press **Ctrl+S**. Studio saves
+a backup under `.plusminus-backups/`, writes the C++ source
+atomically, and by default rebuilds the runner in the background. If compilation
+succeeds, the built-in tests run again automatically. If compilation fails,
+Studio blocks using the obsolete VM until a successful rebuild. Turn off
+automatic rebuilding in Language Internals to build manually.
+
+Open the symbol browser with **Ctrl+Shift+I** or the **Language C++**
+toolbar button. Native source editing needs the checked-out project sources,
+CMake, and a C++20 compiler; standalone prebuilt binaries cannot edit the
+embedded interpreter. The editor does not hot-patch a running VM: changes
+take effect after saving and successfully rebuilding.

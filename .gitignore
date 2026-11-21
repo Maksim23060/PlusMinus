@@ -367,3 +367,6 @@ FodyWeavers.xsd
 /build/pyinstaller/
 /*.spec
 /.venv/
+
+/.plusminus-backups/
+*.bak-studio2
