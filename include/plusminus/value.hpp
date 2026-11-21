@@ -15,7 +15,7 @@ struct Value {
 
     Value() : num(0.0) {}
     Value(double v) : num(v) {}
-    Value(std::shared_ptr<std::vector<double>> a) : arr(a), num(0.0) {}
+    Value(std::shared_ptr<std::vector<double>> a) : num(0.0), arr(a) {}
     Value(const std::string& s) : str(s), isStr(true) {}
 
     double getNum() const { return num; }
