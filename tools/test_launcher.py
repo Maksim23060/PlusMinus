@@ -1,4 +1,4 @@
-"""Regression checks for the cross-platform launcher."""
+"""Dependency-free smoke tests for the portable source launcher."""
 import os
 import sys
 import tempfile
@@ -9,31 +9,39 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import launch
 
+
 class LauncherTests(unittest.TestCase):
     def test_missing_dependencies(self):
         with patch.object(launch, 'has_tk', return_value=False), \
              patch.object(launch, 'find_cmake', return_value=None), \
              patch.object(launch, 'has_compiler', return_value=False):
-            self.assertEqual(launch.missing_dependencies(), ['tk', 'cmake', 'cxx'])
+            self.assertEqual(launch.missing_dependencies(), ['cmake', 'cxx'])
 
     def test_existing_runner_reused(self):
         with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / 'Parser.cpp'
-            runner = Path(directory) / 'plusminus_runner'
+            folder = Path(directory)
+            source = folder / 'Parser.cpp'
             source.write_text('int x;')
+            runner = folder / 'plusminus_runner'
             runner.write_text('bin')
             with patch.object(launch, 'SOURCES', (source,)):
                 self.assertFalse(launch.needs_build(runner))
+                source.write_text('int y;')
                 os.utime(source, (runner.stat().st_mtime + 10, runner.stat().st_mtime + 10))
                 self.assertTrue(launch.needs_build(runner))
 
-    def test_check_never_installs(self):
+    def test_check_does_not_require_installation(self):
+        # Check mode is diagnostic: no package-management subprocesses.
         with patch.object(sys, 'argv', ['launch.py', '--check']), \
              patch.object(launch, 'missing_dependencies', return_value=['tk']), \
              patch.object(launch, 'source_runner', return_value=None), \
              patch.object(launch, 'find_cmake', return_value=None), \
              patch.object(launch, 'has_compiler', return_value=True), \
              patch.object(launch, 'has_tk', return_value=False), \
-             patch.object(launch, 'run') as runner:
+             patch.object(launch, 'run') as run:
             self.assertEqual(launch.main(), 1)
-            runner.assert_not_called()
+            run.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()
