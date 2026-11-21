@@ -2,6 +2,18 @@
 
 PlusMinus is a C++20 interpreter with a local dark Tkinter desktop IDE.
 
+## Double-click startup
+
+For a **source checkout**, use the launcher in the repository root:
+
+- **Windows:** double-click `Start-PlusMinus.cmd`.
+- **Linux (desktop environment):** double-click `Start-PlusMinus.desktop`; some file managers require a one-time **Allow Launching / Mark as Trusted** action. Alternatively, run `sh Start-PlusMinus.sh`.
+- **macOS:** double-click `Start-PlusMinus.command` in Finder. macOS may require confirming an unsigned script.
+
+These launchers delegate to `launch.py` in the same directory, so you can start them from a folder whose name contains spaces. They compile the C++ runner on first use and launch the IDE; subsequent launches reuse the build. **Starting from source requires an existing Python 3.9+ installation**. The launcher asks before installing missing system tools where supported, and the first launch may take some time.
+
+For **true no-dependency double-click startup**, use the prebuilt application from GitHub Releases: `PlusMinusStudio.exe` (Windows), `PlusMinusStudio` or the accompanying `.desktop` file (Linux), and `PlusMinusStudio.app` (macOS). Linux desktops may still require the file to be marked executable/trusted.
+
 ## Install-free desktop releases
 
 Get the archive for your platform from [GitHub Releases](https://github.com/Maksim23060/PlusMinus/releases) after a version tag is published:
