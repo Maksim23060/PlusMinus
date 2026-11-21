@@ -1802,4 +1802,103 @@ namespace ParserTests
             Assert::IsTrue(timeSync > 0 && timeAsync > 0, L"Both timings should be positive");
         }
     };
+    // ============================================================
+    //  МАСШТАБИРОВАНИЕ ПО ЧИСЛУ ПОТОКОВ (3..12)
+    // ============================================================
+    TEST_CLASS(MultiCoreScaling)
+    {
+        // Генерирует программу: N потоков, каждый крутит цикл и инкрементит res под lock.
+        // После sync res должен быть ровно N.
+        static std::string makeWorkProgram(int n, int iters = 500000)
+        {
+            std::string prog =
+                "proc work(id) {\n"
+                "  i = 0; s = 0;\n"
+                "  while (i < " + std::to_string(iters) + ") { s = s + 1; i = i + 1; }\n"
+                "  lock(res);\n"
+                "  res = res + 1;\n"
+                "  unlock(res);\n"
+                "}\n"
+                "res = 0;\n";
+            for (int k = 1; k <= n; ++k)
+                prog += "go work(" + std::to_string(k) + ");\n";
+            prog += "sync;\n";
+            return prog;
+        }
+
+        // Запуск и логирование
+        static void runScaling(int n)
+        {
+            auto prog = makeWorkProgram(n);
+
+            auto start = std::chrono::high_resolution_clock::now();
+            auto v = runAndGetVars(prog);
+            auto end = std::chrono::high_resolution_clock::now();
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+            std::wstring msg = L"[N=" + std::to_wstring(n) + L"] time=" +
+                std::to_wstring(ms) + L" ms, res=" +
+                std::to_wstring((int)v["res"]) + L"\n";
+            Logger::WriteMessage(msg.c_str());
+
+            // Корректность: все N потоков отработали и инкрементнули res.
+            Assert::AreEqual((double)n, (double)v["res"]);
+        }
+
+    public:
+        TEST_METHOD(ThreeThreads) { runScaling(3); }
+        TEST_METHOD(FourThreads) { runScaling(4); }
+        TEST_METHOD(FiveThreads) { runScaling(5); }
+        TEST_METHOD(SixThreads) { runScaling(6); }
+        TEST_METHOD(SevenThreads) { runScaling(7); }
+        TEST_METHOD(EightThreads) { runScaling(8); }
+        TEST_METHOD(NineThreads) { runScaling(9); }
+        TEST_METHOD(TenThreads) { runScaling(10); }
+        TEST_METHOD(ElevenThreads) { runScaling(11); }
+        TEST_METHOD(TwelveThreads) { runScaling(12); }
+
+        // Сводный отчёт: 1..12 потоков, синхронный baseline + масштабирование.
+        TEST_METHOD(ScalingReport)
+        {
+            const int ITERS = 500000;
+            Logger::WriteMessage(L"\n--- Multi-core scaling report ---\n");
+
+            // Baseline: 38 последовательных вызовов × ITERS итераций
+            std::string syncProg =
+                "proc work(id) {\n"
+                "  i = 0; s = 0;\n"
+                "  while (i < " + std::to_string(ITERS) + ") { s = s + 1; i = i + 1; }\n"
+                "}\n";
+            for (int k = 1; k <= 138; ++k)
+                syncProg += "work(" + std::to_string(k) + ");\n";
+
+            auto s0 = std::chrono::high_resolution_clock::now();
+            evaluate(syncProg);
+            auto s1 = std::chrono::high_resolution_clock::now();
+            long long syncMs = std::chrono::duration_cast<std::chrono::milliseconds>(s1 - s0).count();
+            Logger::WriteMessage((L"Baseline (38 sequential × " + std::to_wstring(ITERS) +
+                L" iters): " + std::to_wstring(syncMs) + L" ms\n").c_str());
+
+            Logger::WriteMessage(L"N   | Time (ms) | Speedup vs baseline | res\n");
+            Logger::WriteMessage(L"----+-----------+---------------------+----\n");
+
+            for (int n = 1; n <= 38; ++n) {
+                auto prog = makeWorkProgram(n, ITERS);
+                auto start = std::chrono::high_resolution_clock::now();
+                auto v = runAndGetVars(prog);
+                auto end = std::chrono::high_resolution_clock::now();
+                long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+                double speedup = (double)syncMs / std::max(1LL, ms);
+                std::wstring line =
+                    (n < 10 ? L" " : L"") + std::to_wstring(n) + L"  | " +
+                    std::to_wstring(ms) + L"\t| " +
+                    std::to_wstring(speedup) + L"x\t\t| " +
+                    std::to_wstring((int)v["res"]) + L"\n";
+                Logger::WriteMessage(line.c_str());
+
+                Assert::AreEqual((double)n, (double)v["res"]);
+            }
+        }
+    };
 }
